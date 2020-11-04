@@ -19,6 +19,15 @@ from src.createdata.data_files_path import (  # isort:skip
 )
 
 
+def conv_to_sec(str_time):
+    if str_time != "--" and str_time != '':
+        return int(str_time.split(":")[0]) * 60 + int(str_time.split(":")[1])
+    else:
+        # if '--' means there was no time spent on the ground.
+        # Taking a call here to consider this as 0 seconds
+        return 0
+
+
 class FightDataScraperV2:
     def __init__(self):
         self.HEADER: str = "R_fighter;B_fighter;R_KD;B_KD;R_SIG_STR.;B_SIG_STR.\
@@ -149,16 +158,24 @@ class FightDataScraperV2:
         out_rows = []
 
         # TODO: determine this range by using https://fightmetric.rds.ca/events/completed to find the most recent completed?
-        for event_id in range(900, 1005):
+        # Event 766 on 2016-03-19 is where the cleanest data seem to start.
+        for event_id in range(766, 1005):
             try:
                 event_json = self.get_fightmetric_event_data(event_id)
                 event = event_json['FMLiveFeed']
 
                 for fight in event['Fights']:
+                    # Sometimes EndingRoundNum is null, seems to be related to fights that end in a draw.
+                    # http://liveapiorigin.fightmetric.com/V1/858/Fnt.json
+                    # http://liveapiorigin.fightmetric.com/V2/858/7026/Stats.json
+                    ending_round = fight['EndingRoundNum']
+                    if ending_round is None:
+                        ending_round = 1
+
                     x = {'event_id': event['EventID'], 'date': event['Date'], 'fight_id': fight['FightID'],
                          'weight_class': fight['WeightClassName'],
-                         'status': fight['Status'], 'possible_rounds': fight['PossibleRds'],
-                         'final_round': fight['EndingRoundNum'],
+                         'possible_rounds': fight['PossibleRds'],
+                         'final_round': ending_round,
                          'win_by': fight['Method'], 'gmt': event['GMT'], 'venue': event['Venue'],
                          'country': event['Country'], 'city': event['City']}
 
@@ -174,8 +191,10 @@ class FightDataScraperV2:
                         x[f'{clr_prefix}_outcome'] = f['Outcome']
 
                     fight_json = self.get_fightmetric_fight_data(event_id, fight['FightID'])
+                    x['status'] = fight_json['FMLiveFeed']['Status']
                     fight_stats = fight_json['FMLiveFeed']['FightStats']
-                    x['last_round_time'] = fight_json['FMLiveFeed']['CurrentRoundTime']
+
+                    x['last_round_time'] = conv_to_sec(fight_json['FMLiveFeed']['CurrentRoundTime'])
 
                     for clr in ['Red', 'Blue']:
                         clr_prefix = 'R'
@@ -239,13 +258,13 @@ class FightDataScraperV2:
                         x[f'{clr_prefix}_ground_leg_str_landed'] = strikes['Ground Leg Strikes']['Landed']
 
                         tip = fight_stats[clr]['TIP']
-                        x[f'{clr_prefix}_standing_time'] = tip['Standing Time']
-                        x[f'{clr_prefix}_control_time'] = tip['Control Time']
-                        x[f'{clr_prefix}_ground_time'] = tip['Ground Time']
-                        x[f'{clr_prefix}_neutral_time'] = tip['Neutral Time']
-                        x[f'{clr_prefix}_ground_control_time'] = tip['Ground Control Time']
-                        x[f'{clr_prefix}_distance_time'] = tip['Distance Time']
-                        x[f'{clr_prefix}_clinch_time'] = tip['Clinch Time']
+                        x[f'{clr_prefix}_standing_time'] = conv_to_sec(tip['Standing Time'])
+                        x[f'{clr_prefix}_control_time'] = conv_to_sec(tip['Control Time'])
+                        x[f'{clr_prefix}_ground_time'] = conv_to_sec(tip['Ground Time'])
+                        x[f'{clr_prefix}_neutral_time'] = conv_to_sec(tip['Neutral Time'])
+                        x[f'{clr_prefix}_ground_control_time'] = conv_to_sec(tip['Ground Control Time'])
+                        x[f'{clr_prefix}_distance_time'] = conv_to_sec(tip['Distance Time'])
+                        x[f'{clr_prefix}_clinch_time'] = conv_to_sec(tip['Clinch Time'])
 
                     out_rows.append(x)
             except Exception as e:

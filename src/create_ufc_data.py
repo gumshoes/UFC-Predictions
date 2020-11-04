@@ -9,7 +9,6 @@ with FightDataScraperV2() as fight_data_scraper:
 # fight_data_scraper = FightDataScraper()
 # fight_data_scraper.create_fight_data_csv()  # Scrapes raw ufc fight data from website
 
-
 # print("Creating fighter data \n")
 # fighter_details_scraper = FighterDetailsScraper()
 # fighter_details_scraper.create_fighter_data_csv()  # Scrapes raw ufc fighter data from website
