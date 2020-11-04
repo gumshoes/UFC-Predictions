@@ -27,34 +27,26 @@ class FightDataScraperV2:
         ;B_BODY;R_LEG;B_LEG;R_DISTANCE;B_DISTANCE;R_CLINCH;B_CLINCH;R_GROUND;B_GROUND\
         ;win_by;last_round;last_round_time;Format;Referee;date;location;Fight_type;Winner\n"
 
-    # https://towardsdatascience.com/flattening-json-objects-in-python-f5343c794b10
-    def flatten_json(self, y):
-        out = {}
+        self.fight_data: dict = {}
+        self.event_data: dict = {}
 
-        def flatten(x, name=''):
-            if type(x) is dict:
-                for a in x:
-                    flatten(x[a], name + a + '_')
-            elif type(x) is list:
-                i = 0
-                for a in x:
-                    flatten(a, name + str(i) + '_')
-                    i += 1
-            else:
-                out[name[:-1]] = x
+    def __enter__(self):
+        # Load cached data (it will be persisted at class exit).
+        if FIGHTMETRIC_FIGHTS_PICKLE.exists():
+            with open(FIGHTMETRIC_FIGHTS_PICKLE.as_posix(), 'rb') as pickle_in:
+                self.fight_data = pickle.load(pickle_in)
 
-        flatten(y)
-        return out
+        if FIGHTMETRIC_EVENTS_PICKLE.exists():
+            with open(FIGHTMETRIC_EVENTS_PICKLE.as_posix(), 'rb') as pickle_in:
+                self.event_data = pickle.load(pickle_in)
+
+        return self
 
     def get_fightmetric_event_data(self, event_id):
         event_json = None
-        event_data = {}
-        if FIGHTMETRIC_EVENTS_PICKLE.exists():
-            with open(FIGHTMETRIC_EVENTS_PICKLE.as_posix(), 'rb') as pickle_in:
-                event_data = pickle.load(pickle_in)
 
-        if event_id in event_data:
-            event_json = event_data[event_id]
+        if event_id in self.event_data:
+            event_json = self.event_data[event_id]
         else:
             try:
                 url_event = f'http://liveapiorigin.fightmetric.com/V1/{event_id}/Fnt.json'
@@ -62,9 +54,7 @@ class FightDataScraperV2:
                 r = requests.get(url_event)
                 if r.ok:
                     event_json = r.json()
-                    event_data[event_id] = event_json
-                    with open(FIGHTMETRIC_EVENTS_PICKLE.as_posix(), "wb") as f:
-                        pickle.dump(event_data, f)
+                    self.event_data[event_id] = event_json
                 else:
                     print(r.status_code)
             except Exception as e:
@@ -74,15 +64,10 @@ class FightDataScraperV2:
 
     def get_fightmetric_fight_data(self, event_id, fight_id):
         fight_json = None
-        fight_data = {}
         comb_id = f'{event_id}_{fight_id}'
 
-        if FIGHTMETRIC_FIGHTS_PICKLE.exists():
-            with open(FIGHTMETRIC_FIGHTS_PICKLE.as_posix(), 'rb') as pickle_in:
-                fight_data = pickle.load(pickle_in)
-
-        if comb_id in fight_data:
-            fight_json = fight_data[comb_id]
+        if comb_id in self.fight_data:
+            fight_json = self.fight_data[comb_id]
         else:
             try:
                 url_fight = f'http://liveapiorigin.fightmetric.com/V2/{event_id}/{fight_id}/Stats.json'
@@ -90,9 +75,7 @@ class FightDataScraperV2:
                 r = requests.get(url_fight)
                 if r.ok:
                     fight_json = r.json()
-                    fight_data[comb_id] = fight_json
-                    with open(FIGHTMETRIC_FIGHTS_PICKLE.as_posix(), "wb") as f:
-                        pickle.dump(fight_data, f)
+                    self.fight_data[comb_id] = fight_json
                 else:
                     print(r.status_code)
 
@@ -102,7 +85,7 @@ class FightDataScraperV2:
         return fight_json
 
     def create_fight_data_csv(self) -> None:
-        print("Scraping links!")
+        print("Scraping data.")
 
         csv_columns = ['event_id', 'date', 'gmt', 'venue', 'city', 'country', 'fight_id', 'weight_class', 'status',
                        'possible_rounds', 'final_round',
@@ -164,16 +147,11 @@ class FightDataScraperV2:
                        'R_distance_time', 'B_distance_time',
                        'R_clinch_time', 'B_clinch_time']
         out_rows = []
-        for event_id in range(600, 1005):
+
+        # TODO: determine this range by using https://fightmetric.rds.ca/events/completed to find the most recent completed?
+        for event_id in range(900, 1005):
             try:
                 event_json = self.get_fightmetric_event_data(event_id)
-                # url_event = f'http://liveapiorigin.fightmetric.com/V1/{event_id}/Fnt.json'
-                # print(url_event)
-                # event_json = requests.get(url_event).json()
-                # winner = [fighter['FullName'] for fighter in r['FMLiveFeed']['Fights'][0]['Fighters'] if
-                #           fighter['Outcome'] == 'Win'][0]
-                # print(winner)
-                # print(json.dumps(r))
                 event = event_json['FMLiveFeed']
 
                 for fight in event['Fights']:
@@ -195,9 +173,6 @@ class FightDataScraperV2:
                         x[f'{clr_prefix}_fighter_id'] = f['FighterID']
                         x[f'{clr_prefix}_outcome'] = f['Outcome']
 
-                    # url_fight = f'http://liveapiorigin.fightmetric.com/V2/{event_id}/{fight["FightID"]}/Stats.json'
-                    # print(url_fight)
-                    # fight_json = requests.get(url_fight).json()
                     fight_json = self.get_fightmetric_fight_data(event_id, fight['FightID'])
                     fight_stats = fight_json['FMLiveFeed']['FightStats']
                     x['last_round_time'] = fight_json['FMLiveFeed']['CurrentRoundTime']
@@ -281,6 +256,14 @@ class FightDataScraperV2:
             writer.writeheader()
             for data in out_rows:
                 writer.writerow(data)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        with open(FIGHTMETRIC_FIGHTS_PICKLE.as_posix(), "wb") as f:
+            pickle.dump(self.fight_data, f)
+
+        with open(FIGHTMETRIC_EVENTS_PICKLE.as_posix(), "wb") as f:
+            pickle.dump(self.event_data, f)
+        pass
 
 
 class FightDataScraper:

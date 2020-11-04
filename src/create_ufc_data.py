@@ -3,8 +3,8 @@ from src.createdata.scrape_fight_data import FightDataScraper, FightDataScraperV
 from src.createdata.scrape_fighter_details import FighterDetailsScraper
 
 print("Creating fight data \n")
-fight_data_scraper = FightDataScraperV2()
-fight_data_scraper.create_fight_data_csv()  # Scrapes raw ufc fight data from website
+with FightDataScraperV2() as fight_data_scraper:
+    fight_data_scraper.create_fight_data_csv()  # Scrapes raw ufc fight data from website
 
 # fight_data_scraper = FightDataScraper()
 # fight_data_scraper.create_fight_data_csv()  # Scrapes raw ufc fight data from website
