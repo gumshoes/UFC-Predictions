@@ -6,7 +6,9 @@ from typing import Dict, List
 import requests
 import csv
 import pandas as pd
+import numpy as np
 from bs4 import BeautifulSoup
+import xlsxwriter
 
 from src.createdata.scrape_fight_links import UFCLinks
 from src.createdata.utils import make_soup, print_progress
@@ -26,7 +28,6 @@ def conv_to_sec(str_time):
         # if '--' means there was no time spent on the ground.
         # Taking a call here to consider this as 0 seconds
         return 0
-
 
 class FightDataScraperV2:
     def __init__(self):
@@ -99,7 +100,9 @@ class FightDataScraperV2:
         csv_columns = ['event_id', 'date', 'gmt', 'venue', 'city', 'country', 'fight_id', 'weight_class', 'status',
                        'possible_rounds', 'final_round',
                        'last_round_time', 'win_by',
-                       'R_fighter', 'B_fighter', 'R_fighter_id', 'B_fighter_id', 'R_outcome', 'B_outcome',
+                       'R_fighter', 'B_fighter', 'R_fighter_id', 'B_fighter_id', 'R_DOB', 'B_DOB', 'R_weight', 'B_weight',
+                       'R_height', 'B_height', 'R_stance', 'B_stance',
+                       'R_outcome', 'B_outcome',
                        'R_knock_down', 'B_knock_down',
                        'R_standups', 'B_standups', 'R_takedowns_attempts', 'R_takedowns_landed', 'B_takedowns_attempts',
                        'B_takedowns_landed',
@@ -189,6 +192,12 @@ class FightDataScraperV2:
                         x[f'{clr_prefix}_fighter'] = f['FullName']
                         x[f'{clr_prefix}_fighter_id'] = f['FighterID']
                         x[f'{clr_prefix}_outcome'] = f['Outcome']
+                        x[f'{clr_prefix}_DOB'] = f['DOB']
+
+                        # Hopefully these are the values at time of fight, not current fighter stats.
+                        x[f'{clr_prefix}_height'] = f['Height']
+                        x[f'{clr_prefix}_weight'] = f['Weight']
+                        x[f'{clr_prefix}_stance'] = f['Stance']
 
                     fight_json = self.get_fightmetric_fight_data(event_id, fight['FightID'])
                     x['status'] = fight_json['FMLiveFeed']['Status']
@@ -270,11 +279,23 @@ class FightDataScraperV2:
             except Exception as e:
                 print(e)
 
-        with open('data/fightmetric.csv', 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=csv_columns)
-            writer.writeheader()
-            for data in out_rows:
-                writer.writerow(data)
+        df = pd.DataFrame(out_rows)
+        # https://stackoverflow.com/questions/61704608/pandas-infer-objects-doesnt-convert-string-columns-to-numeric
+        #df = df.infer_objects()
+        cols = df.columns
+        for c in cols:
+            try:
+                df[c] = pd.to_numeric(df[c])
+            except:
+                pass
+
+        df['R_sig_str_percent'] = round(df['R_sig_str_landed'].div(df['R_sig_str_attempts']).replace(np.inf, 0) * 100, 1)
+        df['B_sig_str_percent'] = round(df['B_sig_str_landed'].div(df['B_sig_str_attempts']).replace(np.inf, 0) * 100, 1)
+
+        #df.to_csv('data/fightmetric.csv', index=False)
+        xlw = pd.ExcelWriter('data/fightmetric_fights.xlsx', engine='xlsxwriter', options={'strings_to_numbers': True})
+        df.to_excel(xlw, sheet_name='Sheet1', index=False, freeze_panes=(1, 0))
+        xlw.close()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         with open(FIGHTMETRIC_FIGHTS_PICKLE.as_posix(), "wb") as f:
