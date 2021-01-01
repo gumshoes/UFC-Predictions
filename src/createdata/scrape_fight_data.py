@@ -1,14 +1,13 @@
-import json
 import os
+import concurrent.futures
+import threading
 import pickle
 from typing import Dict, List
-
 import requests
-import csv
+import re
 import pandas as pd
 import numpy as np
 from bs4 import BeautifulSoup
-import xlsxwriter
 
 from src.createdata.scrape_fight_links import UFCLinks
 from src.createdata.utils import make_soup, print_progress
@@ -51,6 +50,20 @@ class FightDataScraperV2:
                 self.event_data = pickle.load(pickle_in)
 
         return self
+
+    def get_fightmetric_most_recent_event_id(self):
+        soup = make_soup('https://fightmetric.rds.ca/events/completed')
+
+        print("Getting most recent fightmetric.rds.ca event ID.")
+        event_ids = []
+        for row in soup.findAll("td", {"class": "b-table__col"}):
+            for href in row.findAll("a", {"class": "b-table__link"}):
+                lnk = href.get("href") # /event/1012
+                m = re.search('/(\d+)$', lnk)
+                if m:
+                    event_ids.append(int(m.group(1)))
+
+        return max(event_ids)
 
     def get_fightmetric_event_data(self, event_id):
         event_json = None
@@ -162,7 +175,8 @@ class FightDataScraperV2:
 
         # TODO: determine this range by using https://fightmetric.rds.ca/events/completed to find the most recent completed?
         # Event 766 on 2016-03-19 is where the cleanest data seem to start.
-        for event_id in range(766, 1005):
+        # Event 500 on 2001-08-19 seems to be the earliest available.
+        for event_id in range(766, self.get_fightmetric_most_recent_event_id()):
             try:
                 event_json = self.get_fightmetric_event_data(event_id)
                 event = event_json['FMLiveFeed']
@@ -329,7 +343,7 @@ class FightDataScraper:
 
         if not new_events_and_fight_links:
             if self.TOTAL_EVENT_AND_FIGHTS_PATH.exists():
-                print("No new fight data to scrape at the moment!")
+                print(f'No new fight data to scrape at the moment, loaded existing data from {self.TOTAL_EVENT_AND_FIGHTS_PATH}.')
                 return
             else:
                 self._scrape_raw_fight_data(
@@ -355,6 +369,7 @@ class FightDataScraper:
             latest_total_fight_data = new_event_and_fights_data.append(
                 old_event_and_fights_data, ignore_index=True
             )
+            # TODO: this outputs a file delimited with ';' instead of ','
             latest_total_fight_data.to_csv(self.TOTAL_EVENT_AND_FIGHTS_PATH, index=None)
 
             os.remove(self.NEW_EVENT_AND_FIGHTS_PATH)
@@ -366,50 +381,61 @@ class FightDataScraper:
             self, event_and_fight_links: Dict[str, List[str]], filepath
     ):
         if filepath.exists():
-            print("file already exists. Overwriting!")
+            print(f'File {filepath} already exists, overwriting.')
 
         total_stats = FightDataScraper._get_total_fight_stats(event_and_fight_links)
         with open(filepath.as_posix(), "wb") as file:
             file.write(bytes(self.HEADER, encoding="ascii", errors="ignore"))
             file.write(bytes(total_stats, encoding="ascii", errors="ignore"))
 
+    def _get_fight_stats_task(self, fight, event_info):
+        # print(threading.get_native_id())
+        total_fight_stats = ""
+        try:
+            fight_soup = make_soup(fight)
+            fight_stats = FightDataScraper._get_fight_stats(fight_soup)
+            fight_details = FightDataScraper._get_fight_details(fight_soup)
+            result_data = FightDataScraper._get_fight_result_data(fight_soup)
+            total_fight_stats = (
+                    fight_stats
+                    + ";"
+                    + fight_details
+                    + ";"
+                    + event_info
+                    + ";"
+                    + result_data
+            )
+        except Exception as e:
+            pass
+            # print("Error getting fight stats, " + str(e))
+
+        return total_fight_stats
     @classmethod
     def _get_total_fight_stats(cls, event_and_fight_links: Dict[str, List[str]]) -> str:
         total_stats = ""
 
         l = len(event_and_fight_links)
-        print("Scraping all fight data: ")
+        print(f'Scraping data for {l} fights: ')
         print_progress(0, l, prefix="Progress:", suffix="Complete")
 
         for index, (event, fights) in enumerate(event_and_fight_links.items()):
             event_soup = make_soup(event)
             event_info = FightDataScraper._get_event_info(event_soup)
 
-            for fight in fights:
-                try:
-                    fight_soup = make_soup(fight)
-                    fight_stats = FightDataScraper._get_fight_stats(fight_soup)
-                    fight_details = FightDataScraper._get_fight_details(fight_soup)
-                    result_data = FightDataScraper._get_fight_result_data(fight_soup)
-                except Exception as e:
-                    continue
-
-                total_fight_stats = (
-                        fight_stats
-                        + ";"
-                        + fight_details
-                        + ";"
-                        + event_info
-                        + ";"
-                        + result_data
-                )
-
-                if total_stats == "":
-                    total_stats = total_fight_stats
-                else:
-                    total_stats = total_stats + "\n" + total_fight_stats
-
-            print_progress(index + 1, l, prefix="Progress:", suffix="Complete")
+            # Get data for each fight in the event in parallel.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                futures = []
+                for fight in fights:
+                    futures.append(executor.submit(FightDataScraper._get_fight_stats_task, self=cls, fight=fight,
+                                                   event_info=event_info))
+                for future in concurrent.futures.as_completed(futures):
+                    fighter_stats = future.result()
+                    if fighter_stats != "":
+                        if total_stats == "":
+                            total_stats = fighter_stats
+                        else:
+                            total_stats = total_stats + "\n" + fighter_stats
+                    print_progress(index + 1, l, prefix="Progress:", suffix="Complete")
 
         return total_stats
 
