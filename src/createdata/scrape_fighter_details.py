@@ -1,3 +1,6 @@
+import re
+import concurrent.futures
+import threading
 import pickle
 from typing import Dict, List
 
@@ -11,7 +14,6 @@ from src.createdata.data_files_path import (  # isort:skip
     PAST_FIGHTER_LINKS_PICKLE,
     SCRAPED_FIGHTER_DATA_DICT_PICKLE,
 )
-
 
 class FighterDetailsScraper:
     def __init__(self):
@@ -29,6 +31,7 @@ class FighterDetailsScraper:
             "TD_Acc",
             "TD_Def",
             "Sub_Avg",
+            'fighter_id',
         ]
         self.FIGHTER_DETAILS_PATH = FIGHTER_DETAILS
         self.PAST_FIGHTER_LINKS_PICKLE_PATH = PAST_FIGHTER_LINKS_PICKLE
@@ -102,30 +105,25 @@ class FighterDetailsScraper:
 
         return new_fighter_links, all_fighter_links
 
-    def _get_fighter_name_and_details(
-        self, fighter_name_and_link: Dict[str, List[str]]
-    ) -> None:
-        fighter_name_and_details = {}
+    def _get_fighter_data_task(self, fighter_name, fighter_url):
+        # http://ufcstats.com/fighter-details/1f454354805b6f75
+        m = re.search('.*/(.*)$', fighter_url)
+        fighter_id = None
+        if (m):
+            fighter_id = m.group(1)
 
-        l = len(fighter_name_and_link)
-        print("Scraping all fighter data: ")
-        print_progress(0, l, prefix="Progress:", suffix="Complete")
-
-        for index, (fighter_name, fighter_url) in enumerate(
-            fighter_name_and_link.items()
-        ):
-            another_soup = make_soup(fighter_url)
-            divs = another_soup.findAll(
-                "li",
-                {"class": "b-list__box-list-item b-list__box-list-item_type_block"},
-            )
-            data = []
-            for i, div in enumerate(divs):
-                if i == 9:
-                    # An empty string is scraped here, let's not append that
-                    continue
-                data.append(
-                    div.text.replace("  ", "")
+        another_soup = make_soup(fighter_url)
+        divs = another_soup.findAll(
+            "li",
+            {"class": "b-list__box-list-item b-list__box-list-item_type_block"},
+        )
+        data = []
+        for i, div in enumerate(divs):
+            if i == 9:
+                # An empty string is scraped here, let's not append that
+                continue
+            data.append(
+                div.text.replace("  ", "")
                     .replace("\n", "")
                     .replace("Height:", "")
                     .replace("Weight:", "")
@@ -140,10 +138,30 @@ class FighterDetailsScraper:
                     .replace("TD Acc.:", "")
                     .replace("TD Def.:", "")
                     .replace("Sub. Avg.:", "")
-                )
+            )
+        data.append(fighter_id)
+        return fighter_name, data
 
-            fighter_name_and_details[fighter_name] = data
-            print_progress(index + 1, l, prefix="Progress:", suffix="Complete")
+    def _get_fighter_name_and_details(
+            self, fighter_name_and_link: Dict[str, List[str]]
+    ) -> None:
+        fighter_name_and_details = {}
+
+        l = len(fighter_name_and_link)
+        print(f'Scraping data for {l} fighters: ')
+
+        # Get fighter data in parallel.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            futures = []
+            for index, (fighter_name, fighter_url) in enumerate(fighter_name_and_link.items()):
+                futures.append(executor.submit(FighterDetailsScraper._get_fighter_data_task, self=self,
+                                               fighter_name=fighter_name, fighter_url=fighter_url))
+            idx_progress = 0
+            print_progress(0, l, prefix="Progress:", suffix="Complete")
+            for future in concurrent.futures.as_completed(futures):
+                fighter_name_and_details[future.result()[0]] = future.result()[1]
+                print_progress(idx_progress + 1, l, prefix="Progress:", suffix="Complete")
+                idx_progress += 1
 
         fighters_with_no_data = []
         for name, details in fighter_name_and_details.items():
@@ -187,7 +205,7 @@ class FighterDetailsScraper:
 
         if not self.new_fighter_links:
             if self.FIGHTER_DETAILS_PATH.exists():
-                print("No new fighter data to scrape at the moment!")
+                print(f'No new fighter data to scrape at the moment, loaded existing data from {self.FIGHTER_DETAILS_PATH}.')
                 return
             else:
                 self._get_fighter_name_and_details(self.all_fighter_links)
@@ -208,4 +226,4 @@ class FighterDetailsScraper:
             )
 
         fighter_details_df.to_csv(self.FIGHTER_DETAILS_PATH, index_label="fighter_name")
-        print("Successfully scraped and saved ufc fighter data!\n")
+        print(f'Successfully scraped and saved ufc fighter data to {self.FIGHTER_DETAILS_PATH}\n')
