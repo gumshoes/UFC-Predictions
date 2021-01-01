@@ -48,6 +48,7 @@ class UFCLinks:
         def get_fight_links(event_links: List[str]) -> Dict[str, List[str]]:
             event_and_fight_links = {}
 
+            num_fights = 0
             l = len(event_links)
             print("Scraping event and fight links: ")
             print_progress(0, l, prefix="Progress:", suffix="Complete")
@@ -63,10 +64,16 @@ class UFCLinks:
                 ):
                     href = row.get("data-link")
                     event_fights.append(href)
+                    num_fights += 1
                 event_and_fight_links[link] = event_fights
 
                 print_progress(index + 1, l, prefix="Progress:", suffix="Complete")
+                #if len(event_and_fight_links) > 10:
+                #    print("TODO: stopping at 10, revert")
+                #    break
 
+            print("event count =", len(event_and_fight_links))
+            print("fight count =", num_fights)
             return event_and_fight_links
 
         new_events_and_fight_links = {}
